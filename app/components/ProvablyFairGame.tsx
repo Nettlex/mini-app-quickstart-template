@@ -1118,16 +1118,16 @@ export default function ProvablyFairGame() {
               <motion.button
                 onPointerUp={handlePullTrigger}
                 onMouseEnter={() => {
-                  if (!isAnimating && !triggerCooldown && !showDeathVideo && viewMode === 'front' && (state.phase === 'LOADED' || state.phase === 'PLAYING') && state.phase !== 'REVEAL' && state.phase !== 'DEAD') {
+                  if (!isAnimating && !triggerCooldown && !showDeathVideo && viewMode === 'front' && (state.phase === 'LOADED' || state.phase === 'PLAYING')) {
                     startBuildup();
                   }
                 }}
                 onMouseLeave={() => {
-                  if (!isAnimating && !triggerCooldown && !showDeathVideo && viewMode === 'front' && (state.phase === 'LOADED' || state.phase === 'PLAYING') && state.phase !== 'REVEAL' && state.phase !== 'DEAD') {
+                  if (!isAnimating && !triggerCooldown && !showDeathVideo && viewMode === 'front' && (state.phase === 'LOADED' || state.phase === 'PLAYING')) {
                     stopBuildup();
                   }
                 }}
-                disabled={isAnimating || triggerCooldown || showDeathVideo || state.phase === 'REVEAL' || state.phase === 'DEAD'}
+                disabled={isAnimating || triggerCooldown || showDeathVideo}
                 className="flex flex-col items-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{ touchAction: 'manipulation' }}
                 whileHover={!isAnimating && !triggerCooldown ? { scale: 1.05 } : {}}
