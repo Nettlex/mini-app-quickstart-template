@@ -27,7 +27,12 @@ export default function Leaderboard({ mode: initialMode }: { mode: 'free' | 'pai
       setLoading(true);
       try {
         const response = await fetch(`/api/game?action=leaderboard&mode=${currentMode}`);
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
         const data = await response.json();
+        
+        console.log('Leaderboard API response:', data); // Debug log
         
         if (currentMode === 'paid' && data.prizePool) {
           setPrizePool(data.prizePool.totalAmount || 0);
@@ -134,6 +139,9 @@ export default function Leaderboard({ mode: initialMode }: { mode: 'free' | 'pai
           <div className="text-center py-12 text-gray-500">
             <p className="text-4xl mb-4">👻</p>
             <p>No players yet. Be the first!</p>
+            <p className="text-xs mt-2 text-gray-600">
+              Play the game to appear on the leaderboard
+            </p>
           </div>
         ) : (
           leaderboard.map((entry, index) => (
