@@ -56,10 +56,26 @@ const USDC_ABI = [
 ] as const;
 
 export function useUSDCPayment(userAddress?: string) {
-  const { sendCalls, data: hash, error, isPending } = useSendCalls();
+  const { sendCalls, data: sendCallsData, error, isPending } = useSendCalls();
+  
+  // Extract transaction hash from sendCalls response
+  // sendCalls returns an object with id property (batch ID or transaction hash)
+  // We need to extract it properly for useWaitForTransactionReceipt
+  let hash: `0x${string}` | undefined = undefined;
+  
+  if (sendCallsData && typeof sendCallsData === 'object' && sendCallsData !== null && 'id' in sendCallsData) {
+    const dataObj = sendCallsData as { id: unknown };
+    const id = dataObj.id;
+    if (typeof id === 'string' && id.startsWith('0x')) {
+      hash = id as `0x${string}`;
+    }
+  }
   
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
     hash,
+    query: {
+      enabled: !!hash,
+    },
   });
 
   // Check user's USDC balance
