@@ -64,6 +64,45 @@ export default function ProvablyFairGame() {
       console.error('❌ Payment error:', paymentError);
     }
   }, [isPaymentSuccess, paymentError]);
+
+  // Ensure video plays when showDeathVideo becomes true
+  useEffect(() => {
+    if (showDeathVideo && videoRef.current) {
+      const video = videoRef.current;
+      // Reset and play video
+      video.currentTime = 0;
+      video.muted = true; // Start muted for autoplay
+      
+      const playVideo = async () => {
+        try {
+          await video.play();
+          console.log('✅ Video play() succeeded');
+          // Unmute after play starts
+          video.muted = false;
+        } catch (error) {
+          console.error('❌ Video play() failed, trying muted:', error);
+          // Try with muted if unmuted fails
+          video.muted = true;
+          try {
+            await video.play();
+            console.log('✅ Video play() succeeded (muted)');
+          } catch (mutedError) {
+            console.error('❌ Video play() failed even muted:', mutedError);
+            // Close overlay if video can't play
+            setTimeout(() => {
+              hasPlayedVideo.current = false;
+              setShowDeathVideo(false);
+            }, 500);
+          }
+        }
+      };
+      
+      // Small delay to ensure video element is ready
+      setTimeout(() => {
+        playVideo();
+      }, 100);
+    }
+  }, [showDeathVideo]);
   
   // Visual states for loading sequence
   const [viewMode, setViewMode] = useState<'ready' | 'loading' | 'spinning' | 'closing' | 'front'>('ready');
@@ -439,10 +478,12 @@ export default function ProvablyFairGame() {
     stopBuildup();
     
     if (state.phase !== 'LOADED' && state.phase !== 'PLAYING') return;
+    if (state.phase === 'REVEAL' || state.phase === 'DEAD') return; // Block trigger during death screen
     if (isAnimating) return;
     if (triggerCooldown) return; // Block during cooldown
     if (viewMode !== 'front') return;
     if (showDecisionUI) return; // Block trigger during decision
+    if (showDeathVideo) return; // Block trigger when death video is showing
     
     // Set processing flag immediately to prevent double calls
     isProcessingTrigger.current = true;
@@ -487,6 +528,13 @@ export default function ProvablyFairGame() {
       
       console.log('📊 Stats updated:', { runStreak, newMaxStreak, deaths: newTotalDeaths, pulls: newTotalPulls });
       
+      // Auto-close video after max 3 seconds if it's still showing (safety timeout)
+      const videoTimeout = setTimeout(() => {
+        console.log('⏱️ Video timeout, closing overlay');
+        hasPlayedVideo.current = false;
+        setShowDeathVideo(false);
+      }, 3000);
+      
       setTimeout(() => {
         const serverSeed = sessionStorage.getItem(`seed_${state.roundId}`);
         if (serverSeed) {
@@ -499,8 +547,9 @@ export default function ProvablyFairGame() {
         // Reset run state
         setCurrentRunSafePulls(0);
         setRunLockedIn(false);
-        // Reset video flag when round ends
-        hasPlayedVideo.current = false;
+        
+        // Clear video timeout if video already closed
+        clearTimeout(videoTimeout);
         
         // After first round death, show payment choice
         if (!hasCompletedFirstRound) {
@@ -978,7 +1027,7 @@ export default function ProvablyFairGame() {
           transition={{ duration: 1, ease: "easeOut" }}
           className="flex flex-col items-center justify-center w-full max-w-md flex-1"
         >
-          <p className="text-green-400 text-center mb-2 mt-0 font-bold text-sm">Ready to play!</p>
+          <p className="text-green-400 text-center mb-6 mt-0 font-bold text-sm">Ready to play!</p>
           
           {/* FRONT VIEW: Barrel aligned with TOP chamber hole */}
           <div className="relative w-full flex flex-col items-center justify-center">
@@ -1070,16 +1119,16 @@ export default function ProvablyFairGame() {
               <motion.button
                 onPointerUp={handlePullTrigger}
                 onMouseEnter={() => {
-                  if (!isAnimating && !triggerCooldown && viewMode === 'front' && (state.phase === 'LOADED' || state.phase === 'PLAYING')) {
+                  if (!isAnimating && !triggerCooldown && !showDeathVideo && viewMode === 'front' && (state.phase === 'LOADED' || state.phase === 'PLAYING') && state.phase !== 'REVEAL' && state.phase !== 'DEAD') {
                     startBuildup();
                   }
                 }}
                 onMouseLeave={() => {
-                  if (!isAnimating && !triggerCooldown && viewMode === 'front' && (state.phase === 'LOADED' || state.phase === 'PLAYING')) {
+                  if (!isAnimating && !triggerCooldown && !showDeathVideo && viewMode === 'front' && (state.phase === 'LOADED' || state.phase === 'PLAYING') && state.phase !== 'REVEAL' && state.phase !== 'DEAD') {
                     stopBuildup();
                   }
                 }}
-                disabled={isAnimating || triggerCooldown}
+                disabled={isAnimating || triggerCooldown || showDeathVideo || state.phase === 'REVEAL' || state.phase === 'DEAD'}
                 className="flex flex-col items-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{ touchAction: 'manipulation' }}
                 whileHover={!isAnimating && !triggerCooldown ? { scale: 1.05 } : {}}
@@ -1141,7 +1190,7 @@ export default function ProvablyFairGame() {
 
         {/* Death Screen */}
         <AnimatePresence>
-          {state.phase === 'DEAD' || state.phase === 'REVEAL' && (
+          {(state.phase === 'DEAD' || state.phase === 'REVEAL') && (
             <motion.div
               initial={{ opacity: 0, scale: 0.8 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -1409,15 +1458,19 @@ export default function ProvablyFairGame() {
       </AnimatePresence>
 
       {/* Death Video Overlay - Plays immediately when shot */}
-      <AnimatePresence>
+      <AnimatePresence mode="wait">
         {showDeathVideo && (
           <motion.div
+            key="death-video"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.1 }}
-            className="fixed inset-0 z-[9999] flex items-center justify-center bg-transparent"
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 z-[9999] flex items-center justify-center bg-black"
             onClick={() => {
+              if (videoRef.current) {
+                videoRef.current.pause();
+              }
               hasPlayedVideo.current = false;
               setShowDeathVideo(false);
             }}
@@ -1425,40 +1478,79 @@ export default function ProvablyFairGame() {
             <video
               ref={videoRef}
               autoPlay
-              muted={false}
+              muted={true}
               playsInline
               preload="auto"
               className="w-full h-full object-cover"
+              onLoadStart={() => {
+                console.log('📹 Video loading started');
+                // Reset video when it starts loading
+                if (videoRef.current) {
+                  videoRef.current.currentTime = 0;
+                }
+              }}
+              onLoadedMetadata={() => {
+                console.log('📹 Video metadata loaded');
+                if (videoRef.current) {
+                  videoRef.current.currentTime = 0;
+                }
+              }}
               onLoadedData={() => {
+                console.log('📹 Video data loaded, attempting to play');
                 // Ensure video plays from start when loaded
                 if (videoRef.current) {
                   videoRef.current.currentTime = 0;
+                  // Unmute after starting to play (for sound)
                   const playPromise = videoRef.current.play();
                   if (playPromise !== undefined) {
-                    playPromise.catch(err => {
-                      console.error('Video play error:', err);
-                      hasPlayedVideo.current = false;
-                      setShowDeathVideo(false);
-                    });
+                    playPromise
+                      .then(() => {
+                        console.log('✅ Video play started');
+                        // Unmute after play starts (browser autoplay policy)
+                        if (videoRef.current) {
+                          videoRef.current.muted = false;
+                        }
+                      })
+                      .catch(err => {
+                        console.error('❌ Video play error:', err);
+                        // Try with muted if unmuted fails
+                        if (videoRef.current) {
+                          videoRef.current.muted = true;
+                          videoRef.current.play().catch(() => {
+                            // If still fails, close overlay
+                            setTimeout(() => {
+                              hasPlayedVideo.current = false;
+                              setShowDeathVideo(false);
+                            }, 500);
+                          });
+                        }
+                      });
                   }
                 }
               }}
               onCanPlay={() => {
-                // Ensure video is ready to play
+                console.log('📹 Video can play');
                 if (videoRef.current && showDeathVideo) {
                   videoRef.current.currentTime = 0;
                 }
               }}
+              onPlaying={() => {
+                // Video is playing successfully
+                console.log('🎬 Explosion video playing');
+              }}
               onEnded={() => {
                 // Close immediately when video ends
+                console.log('🎬 Video ended, closing overlay');
                 hasPlayedVideo.current = false;
                 setShowDeathVideo(false);
               }}
               onError={(e) => {
-                // Silently handle video load errors - just close the overlay
-                console.error('Video error:', e);
-                hasPlayedVideo.current = false;
-                setShowDeathVideo(false);
+                // Handle video load errors - close overlay
+                console.error('❌ Video error:', e, videoRef.current?.error);
+                setTimeout(() => {
+                  hasPlayedVideo.current = false;
+                  setShowDeathVideo(false);
+                }, 500);
               }}
             >
               <source src="/videos/explosion.mp4" type="video/mp4" />
@@ -1466,7 +1558,7 @@ export default function ProvablyFairGame() {
             </video>
             
             {/* Click to skip hint */}
-            <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 text-white/70 text-sm font-bold animate-pulse">
+            <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 text-white/70 text-sm font-bold animate-pulse pointer-events-none">
               👆 Tap to skip
             </div>
           </motion.div>
