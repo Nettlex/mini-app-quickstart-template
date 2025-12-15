@@ -3,6 +3,7 @@ import { useReducer, useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAccount, useSendCalls, useWaitForTransactionReceipt } from 'wagmi';
 import { parseUnits, encodeFunctionData } from 'viem';
+import { sdk } from '@farcaster/miniapp-sdk';
 import {
   Wallet,
   ConnectWallet,
@@ -26,7 +27,32 @@ import { getPendingDistributionsForAddress } from '../utils/prizeDistribution';
 import { useUSDCPayment } from '../hooks/useUSDCPayment';
 
 export default function ProvablyFairGame() {
-  const { address, isConnected } = useAccount();
+  const { address: wagmiAddress, isConnected: wagmiConnected } = useAccount();
+  
+  // Check for Farcaster context and use its wallet address
+  const [farcasterAddress, setFarcasterAddress] = useState<string | null>(null);
+  const [isInMiniapp, setIsInMiniapp] = useState(false);
+  
+  useEffect(() => {
+    sdk.context
+      .then((context) => {
+        if (context && context.user) {
+          setIsInMiniapp(true);
+          const walletAddr = (context.user as any).custodyAddress || 
+                           (context.user as any).walletAddress || 
+                           (context.user as any).address;
+          if (walletAddr) {
+            setFarcasterAddress(walletAddr as string);
+            console.log('🎯 Farcaster wallet detected in game:', walletAddr);
+          }
+        }
+      })
+      .catch(() => setIsInMiniapp(false));
+  }, []);
+  
+  // Use Farcaster address if in miniapp and available, otherwise use wagmi
+  const address = (isInMiniapp && farcasterAddress) ? farcasterAddress as `0x${string}` : wagmiAddress;
+  const isConnected = (isInMiniapp && farcasterAddress) ? true : wagmiConnected;
   const { payEntryFee, isPending: isPaymentPending, isConfirming: isPaymentConfirming, isSuccess: isPaymentSuccess, error: paymentError, balance: usdcBalance } = useUSDCPayment(address);
   const { sendCalls, data: depositTxData, isPending: isDepositPending } = useSendCalls();
   
