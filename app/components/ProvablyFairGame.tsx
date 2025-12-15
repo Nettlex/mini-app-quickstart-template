@@ -34,6 +34,7 @@ export default function ProvablyFairGame() {
   const [showDeathVideo, setShowDeathVideo] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hasPlayedVideo = useRef(false);
+  const isProcessingTrigger = useRef(false); // Prevent double trigger pulls
   const [hasCompletedFirstRound, setHasCompletedFirstRound] = useState(false);
   const [showPaymentChoice, setShowPaymentChoice] = useState(false);
   const [isFreeModePlayer, setIsFreeModePlayer] = useState(true);
@@ -201,6 +202,7 @@ export default function ProvablyFairGame() {
     setCurrentRunSafePulls(0);
     setRunLockedIn(false);
     hasPlayedVideo.current = false; // Reset video flag on new round
+    isProcessingTrigger.current = false; // Reset trigger processing flag
     setShowDecisionUI(false);
     
     // STEP 0: Start loading sequence - BACK VIEW (cylinder open left)
@@ -425,6 +427,12 @@ export default function ProvablyFairGame() {
 
   // Pull trigger
   const handlePullTrigger = () => {
+    // Prevent double firing with ref check
+    if (isProcessingTrigger.current) {
+      console.log('🚫 Trigger already processing, ignoring');
+      return;
+    }
+    
     console.log('🔫 PULL - Phase:', state.phase, 'Chamber:', state.chamberIndex, 'Bullet:', state.bulletIndex);
     
     // Stop buildup sound immediately
@@ -436,6 +444,9 @@ export default function ProvablyFairGame() {
     if (viewMode !== 'front') return;
     if (showDecisionUI) return; // Block trigger during decision
     
+    // Set processing flag immediately to prevent double calls
+    isProcessingTrigger.current = true;
+    
     const currentChamber = state.chamberIndex;
     const isHit = currentChamber === state.bulletIndex;
     
@@ -446,11 +457,12 @@ export default function ProvablyFairGame() {
     if (isHit) {
       playSound('bang');
       console.log('💀 BANG!');
-      // Show death video IMMEDIATELY - only if not already shown
-      if (!hasPlayedVideo.current) {
-        hasPlayedVideo.current = true;
+      // Show death video IMMEDIATELY - reset and play
+      hasPlayedVideo.current = true;
+      setShowDeathVideo(false); // Reset first
+      setTimeout(() => {
         setShowDeathVideo(true);
-      }
+      }, 10);
     } else {
       playSound('click');
       console.log('✓ CLICK');
@@ -485,6 +497,7 @@ export default function ProvablyFairGame() {
         }
         setIsAnimating(false);
         setTriggerCooldown(false); // Clear cooldown after animation (1000ms)
+        isProcessingTrigger.current = false; // Reset processing flag
         
         // Reset run state
         setCurrentRunSafePulls(0);
@@ -521,10 +534,11 @@ export default function ProvablyFairGame() {
         }, 500);
       }
       
-      setTimeout(() => {
-        setIsAnimating(false);
-        setTriggerCooldown(false); // Clear cooldown after animation (300ms)
-      }, 300);
+        setTimeout(() => {
+          setIsAnimating(false);
+          setTriggerCooldown(false); // Clear cooldown after animation (300ms)
+          isProcessingTrigger.current = false; // Reset processing flag
+        }, 300);
     }
   };
   
@@ -546,6 +560,7 @@ export default function ProvablyFairGame() {
     setCurrentRunSafePulls(0);
     setRunLockedIn(false);
     hasPlayedVideo.current = false; // Reset video flag on new round
+    isProcessingTrigger.current = false; // Reset trigger processing flag
     setViewMode('ready');
   };
   
@@ -972,7 +987,7 @@ export default function ProvablyFairGame() {
           <div className="relative w-full flex flex-col items-center justify-center">
             
             {/* Barrel + Chamber Container */}
-            <div className="relative w-48 h-48 flex items-center justify-center">
+            <div className="relative w-40 h-40 flex items-center justify-center">
               
               {/* LAYER 1: Rotating Chamber (BEHIND barrel) */}
               <motion.div 
@@ -982,12 +997,12 @@ export default function ProvablyFairGame() {
                   rotate: cylinderRotation
                 }}
                 transition={{
-                  type: "spring",
-                  stiffness: 300,
-                  damping: 30
+                  type: "tween",
+                  duration: 0.3,
+                  ease: "easeOut"
                 }}
               >
-                <div className="relative w-52 h-52">
+                <div className="relative w-44 h-44">
                   {/* Cylinder body */}
                   <div className="absolute inset-0 bg-gradient-to-br from-gray-600 via-gray-700 to-gray-800 rounded-full border-4 border-gray-700 shadow-2xl" />
                   
@@ -995,14 +1010,14 @@ export default function ProvablyFairGame() {
                   {Array.from({ length: 8 }).map((_, i) => {
                     const angle = (i * 360) / 8;
                     const radian = (angle * Math.PI) / 180;
-                    const radius = 85; // Closer to center (was 95)
+                    const radius = 70; // Scaled down for smaller chamber
                     const x = Math.cos(radian) * radius;
                     const y = Math.sin(radian) * radius;
                     
                     return (
                       <div
                         key={i}
-                        className="absolute w-11 h-11 transform -translate-x-1/2 -translate-y-1/2"
+                        className="absolute w-9 h-9 transform -translate-x-1/2 -translate-y-1/2"
                         style={{
                           left: `calc(50% + ${x}px)`,
                           top: `calc(50% + ${y}px)`,
@@ -1014,7 +1029,7 @@ export default function ProvablyFairGame() {
                   })}
                   
                   {/* Center pin */}
-                  <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-16 h-16 bg-gray-800 rounded-full border-3 border-gray-700 shadow-lg" />
+                  <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-12 h-12 bg-gray-800 rounded-full border-2 border-gray-700 shadow-lg" />
                 </div>
               </motion.div>
               
@@ -1022,27 +1037,27 @@ export default function ProvablyFairGame() {
               <div 
                 className="absolute left-1/2 top-1/2 transform -translate-x-1/2 -translate-y-1/2" 
                 style={{ 
-                  marginTop: '-85px', // Align with top chamber hole (radius 85)
+                  marginTop: '-70px', // Align with top chamber hole (radius 70)
                   zIndex: 5 
                 }}
               >
                 <div className="flex flex-col items-center">
                   {/* Sights container - aligned by bottom edge */}
-                  <div className="relative h-[10px] w-20 mb-0">
+                  <div className="relative h-[8px] w-16 mb-0">
                     {/* Rear sight - slightly lower */}
-                    <div className="absolute left-1/2 transform -translate-x-1/2 w-7 h-[8px] bg-gray-700 border border-gray-600 flex items-center justify-center" style={{ bottom: '-4px' }}>
-                      <div className="w-[2px] h-full bg-gray-900" />
+                    <div className="absolute left-1/2 transform -translate-x-1/2 w-6 h-[6px] bg-gray-700 border border-gray-600 flex items-center justify-center" style={{ bottom: '-3px' }}>
+                      <div className="w-[1.5px] h-full bg-gray-900" />
                     </div>
                     
                     {/* Front sight - full height, centered horizontally */}
-                    <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 w-[3px] h-[10px] bg-gray-600 border-x border-gray-500" />
+                    <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 w-[2px] h-[8px] bg-gray-600 border-x border-gray-500" />
                   </div>
                   
                   {/* Barrel - immediately below sights */}
-                  <div className="relative w-20 h-20">
-                    <div className="absolute inset-0 bg-gradient-to-br from-gray-800 via-gray-900 to-black rounded-full border-4 border-gray-700 shadow-[0_0_40px_rgba(0,0,0,0.9)]">
-                      <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-14 h-14 bg-black rounded-full border-3 border-gray-900 shadow-[inset_0_0_20px_rgba(0,0,0,1)]">
-                        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-gray-950 rounded-full" />
+                  <div className="relative w-16 h-16">
+                    <div className="absolute inset-0 bg-gradient-to-br from-gray-800 via-gray-900 to-black rounded-full border-3 border-gray-700 shadow-[0_0_30px_rgba(0,0,0,0.9)]">
+                      <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-11 h-11 bg-black rounded-full border-2 border-gray-900 shadow-[inset_0_0_15px_rgba(0,0,0,1)]">
+                        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-6 h-6 bg-gray-950 rounded-full" />
                       </div>
                     </div>
                   </div>
@@ -1079,7 +1094,7 @@ export default function ProvablyFairGame() {
                   <img 
                     src={isAnimating ? "/images/trigger_pulled.png" : "/images/trigger.png"}
                     alt="Trigger"
-                    className="w-16 h-16 object-contain drop-shadow-2xl"
+                    className="w-12 h-12 object-contain drop-shadow-2xl"
                   />
                 </motion.div>
                 
@@ -1418,7 +1433,20 @@ export default function ProvablyFairGame() {
                 // Ensure video plays from start when loaded
                 if (videoRef.current) {
                   videoRef.current.currentTime = 0;
-                  videoRef.current.play().catch(console.error);
+                  const playPromise = videoRef.current.play();
+                  if (playPromise !== undefined) {
+                    playPromise.catch(err => {
+                      console.error('Video play error:', err);
+                      hasPlayedVideo.current = false;
+                      setShowDeathVideo(false);
+                    });
+                  }
+                }
+              }}
+              onCanPlay={() => {
+                // Ensure video is ready to play
+                if (videoRef.current && showDeathVideo) {
+                  videoRef.current.currentTime = 0;
                 }
               }}
               onEnded={() => {
@@ -1428,6 +1456,7 @@ export default function ProvablyFairGame() {
               }}
               onError={(e) => {
                 // Silently handle video load errors - just close the overlay
+                console.error('Video error:', e);
                 hasPlayedVideo.current = false;
                 setShowDeathVideo(false);
               }}
