@@ -1,13 +1,10 @@
 /**
- * Simple persistent storage for leaderboard data
- * For Vercel deployment, we'll use a combination of:
- * 1. Client-side localStorage for immediate updates
- * 2. Server-side file storage for persistence (falls back to in-memory if file system unavailable)
- * 3. Periodic sync between client and server
+ * Edge Config storage for leaderboard data
+ * Uses Vercel Edge Config for global, persistent storage
+ * All server instances share the same data instantly
  */
 
-import { promises as fs } from 'fs';
-import path from 'path';
+import { get } from '@vercel/edge-config';
 
 interface LeaderboardEntry {
   address: string;
@@ -33,8 +30,8 @@ interface StorageData {
   playerStats: Record<string, any>;
 }
 
-// In-memory fallback
-let memoryStore: StorageData = {
+// In-memory cache (syncs with Edge Config)
+let cachedData: StorageData = {
   leaderboard: {
     free: [],
     paid: [],
@@ -47,52 +44,92 @@ let memoryStore: StorageData = {
   playerStats: {},
 };
 
-// Try to use /tmp directory (available on Vercel)
-const STORAGE_PATH = process.env.STORAGE_PATH || '/tmp/game-data.json';
+let lastFetch = 0;
+const CACHE_TTL = 30000; // 30 seconds cache
 
 /**
- * Load data from persistent storage
+ * Load data from Edge Config
  */
 export async function loadData(): Promise<StorageData> {
   try {
-    // Try reading from file first
-    const data = await fs.readFile(STORAGE_PATH, 'utf-8');
-    const parsed = JSON.parse(data);
+    const now = Date.now();
     
-    // Update memory store
-    memoryStore = parsed;
+    // Use cache if fresh (30s TTL)
+    if (now - lastFetch < CACHE_TTL) {
+      console.log('📦 Using cached data (fresh)');
+      return cachedData;
+    }
     
-    console.log('📂 Loaded data from persistent storage');
-    return parsed;
+    // Fetch from Edge Config
+    const data = await get<StorageData>('game-data');
+    
+    if (data) {
+      cachedData = data;
+      lastFetch = now;
+      console.log('🌐 Loaded data from Edge Config:', {
+        freeLeaderboard: data.leaderboard?.free?.length || 0,
+        paidLeaderboard: data.leaderboard?.paid?.length || 0,
+        playerStats: Object.keys(data.playerStats || {}).length,
+        prizePool: data.prizePool?.totalAmount || 0
+      });
+      return data;
+    } else {
+      // First time - initialize with empty data
+      console.log('⚠️ No data in Edge Config yet, initializing...');
+      await saveData(cachedData);
+      return cachedData;
+    }
   } catch (error) {
-    // File doesn't exist or can't be read - use memory store
-    console.log('⚠️ Using in-memory storage (no persistent file available)');
-    return memoryStore;
+    console.log('⚠️ Edge Config error, using cache:', error instanceof Error ? error.message : 'Unknown');
+    return cachedData;
   }
 }
 
 /**
- * Save data to persistent storage
+ * Save data to Edge Config
  */
 export async function saveData(data: StorageData): Promise<void> {
-  // Always update memory store
-  memoryStore = data;
+  // Update cache immediately
+  cachedData = data;
+  lastFetch = Date.now();
   
   try {
-    // Try to save to file
-    await fs.writeFile(STORAGE_PATH, JSON.stringify(data, null, 2), 'utf-8');
-    console.log('💾 Saved data to persistent storage');
+    // Save to Edge Config via API endpoint
+    const baseUrl = process.env.VERCEL_URL 
+      ? `https://${process.env.VERCEL_URL}`
+      : 'http://localhost:3000';
+    
+    const response = await fetch(`${baseUrl}/api/update-edge-config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'game-data', value: data }),
+    });
+    
+    if (!response.ok) {
+      const error = await response.text();
+      console.error('❌ Failed to save to Edge Config:', error);
+    } else {
+      console.log('💾 Saved data to Edge Config:', {
+        freeLeaderboard: data.leaderboard?.free?.length || 0,
+        paidLeaderboard: data.leaderboard?.paid?.length || 0,
+        playerStats: Object.keys(data.playerStats || {}).length,
+      });
+    }
   } catch (error) {
-    // If file write fails, just keep in memory
-    console.log('⚠️ Could not save to file, keeping in memory only');
+    console.log('⚠️ Could not save to Edge Config:', error instanceof Error ? error.message : 'Unknown');
   }
 }
 
 /**
- * Get current data (from memory)
+ * Get current data (from cache)
  */
 export function getData(): StorageData {
-  return memoryStore;
+  console.log('📊 getData called - current cache:', {
+    freeLeaderboard: cachedData.leaderboard?.free?.length || 0,
+    paidLeaderboard: cachedData.leaderboard?.paid?.length || 0,
+    playerStats: Object.keys(cachedData.playerStats || {}).length
+  });
+  return cachedData;
 }
 
 /**
@@ -183,4 +220,5 @@ export async function updatePrizePool(update: {
 export async function initStorage(): Promise<void> {
   await loadData();
 }
+
 

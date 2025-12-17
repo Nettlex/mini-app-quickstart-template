@@ -23,7 +23,9 @@ async function ensureInitialized() {
 }
 
 export async function GET(request: NextRequest) {
+  console.log('🔄 GET request received');
   await ensureInitialized();
+  console.log('✅ Storage initialized');
   const data = getData();
   
   const { searchParams } = new URL(request.url);
@@ -32,6 +34,8 @@ export async function GET(request: NextRequest) {
 
   if (action === 'leaderboard') {
     const mode = searchParams.get('mode') || 'all';
+    
+    console.log(`📋 Leaderboard request - mode: ${mode}, free: ${data.leaderboard.free.length}, paid: ${data.leaderboard.paid.length}`);
     
     if (mode === 'free') {
       return NextResponse.json({ leaderboard: data.leaderboard.free });
@@ -116,6 +120,7 @@ export async function POST(request: NextRequest) {
 
       // Save player stats
       await updatePlayerStats(address, updatedStats);
+      console.log('💾 Player stats saved for', address);
 
       // Update leaderboard
       await updateLeaderboardEntry(
@@ -130,6 +135,7 @@ export async function POST(request: NextRequest) {
           lastPlayed: updatedStats.lastPlayed || Date.now(),
         }
       );
+      console.log('🏆 Leaderboard updated for', address, 'mode:', updatedStats.isPaid ? 'paid' : 'free');
 
       return NextResponse.json({ success: true, stats: updatedStats });
     }
