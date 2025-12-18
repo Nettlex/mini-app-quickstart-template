@@ -93,30 +93,55 @@ export async function saveData(data: StorageData): Promise<void> {
   cachedData = data;
   lastFetch = Date.now();
   
+  const edgeConfigId = process.env.EDGE_CONFIG_ID;
+  const vercelToken = process.env.VERCEL_TOKEN;
+  
+  if (!edgeConfigId || !vercelToken) {
+    console.error('❌ Cannot save: Missing EDGE_CONFIG_ID or VERCEL_TOKEN');
+    return;
+  }
+  
   try {
-    // Save to Edge Config via API endpoint
-    const baseUrl = process.env.VERCEL_URL 
-      ? `https://${process.env.VERCEL_URL}`
-      : 'http://localhost:3000';
-    
-    const response = await fetch(`${baseUrl}/api/update-edge-config`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key: 'game-data', value: data }),
+    console.log('💾 Saving to Edge Config...', {
+      freeLeaderboard: data.leaderboard?.free?.length || 0,
+      paidLeaderboard: data.leaderboard?.paid?.length || 0,
+      playerStats: Object.keys(data.playerStats || {}).length,
     });
+    
+    // Save directly to Edge Config via Vercel API
+    const response = await fetch(
+      `https://api.vercel.com/v1/edge-config/${edgeConfigId}/items`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${vercelToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          items: [
+            {
+              operation: 'upsert',
+              key: 'game-data',
+              value: data,
+            },
+          ],
+        }),
+      }
+    );
     
     if (!response.ok) {
       const error = await response.text();
-      console.error('❌ Failed to save to Edge Config:', error);
-    } else {
-      console.log('💾 Saved data to Edge Config:', {
-        freeLeaderboard: data.leaderboard?.free?.length || 0,
-        paidLeaderboard: data.leaderboard?.paid?.length || 0,
-        playerStats: Object.keys(data.playerStats || {}).length,
+      console.error('❌ Failed to save to Edge Config:', {
+        status: response.status,
+        statusText: response.statusText,
+        error
       });
+    } else {
+      const result = await response.json();
+      console.log('✅ Successfully saved to Edge Config!', result);
     }
   } catch (error) {
-    console.log('⚠️ Could not save to Edge Config:', error instanceof Error ? error.message : 'Unknown');
+    console.error('❌ Error saving to Edge Config:', error instanceof Error ? error.message : 'Unknown');
   }
 }
 
