@@ -6,9 +6,12 @@ export async function GET(request: NextRequest) {
     // Check environment variables
     const envCheck = {
       EDGE_CONFIG: !!process.env.EDGE_CONFIG,
+      EDGE_CONFIG_VALUE: process.env.EDGE_CONFIG?.substring(0, 30) + '...', // Show first 30 chars
       EDGE_CONFIG_ID: !!process.env.EDGE_CONFIG_ID,
+      EDGE_CONFIG_ID_VALUE: process.env.EDGE_CONFIG_ID, // Show full value (it's safe, it's just an ID)
       VERCEL_TOKEN: !!process.env.VERCEL_TOKEN,
-      VERCEL_URL: !!process.env.VERCEL_URL,
+      VERCEL_TOKEN_PREFIX: process.env.VERCEL_TOKEN?.substring(0, 10) + '...', // Show first 10 chars
+      VERCEL_URL: process.env.VERCEL_URL,
     };
 
     console.log('🔍 Environment check:', envCheck);
