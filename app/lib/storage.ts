@@ -17,6 +17,14 @@ interface LeaderboardEntry {
   lastPlayed?: number;
 }
 
+export interface PlayerBalance {
+  balance: number;
+  pendingPrizes: number;
+  totalDeposited: number;
+  totalWithdrawn: number;
+  lastUpdated: number;
+}
+
 interface StorageData {
   leaderboard: {
     free: LeaderboardEntry[];
@@ -28,6 +36,7 @@ interface StorageData {
     lastUpdated: number;
   };
   playerStats: Record<string, any>;
+  playerBalances: Record<string, PlayerBalance>; // NEW: Server-side balances
 }
 
 // In-memory cache (syncs with Edge Config)
@@ -42,6 +51,7 @@ let cachedData: StorageData = {
     lastUpdated: Date.now(),
   },
   playerStats: {},
+  playerBalances: {}, // NEW: Server-side balances
 };
 
 let lastFetch = 0;
@@ -244,6 +254,129 @@ export async function updatePrizePool(update: {
  */
 export async function initStorage(): Promise<void> {
   await loadData();
+}
+
+// ========================================
+// SERVER-AUTHORITATIVE BALANCE MANAGEMENT
+// ========================================
+
+/**
+ * Get player balance from server
+ */
+export function getPlayerBalance(address: string): PlayerBalance {
+  const data = getData();
+  return data.playerBalances[address] || {
+    balance: 0,
+    pendingPrizes: 0,
+    totalDeposited: 0,
+    totalWithdrawn: 0,
+    lastUpdated: Date.now(),
+  };
+}
+
+/**
+ * Add balance (deposit or prize)
+ */
+export async function addBalance(
+  address: string,
+  amount: number,
+  type: 'deposit' | 'prize'
+): Promise<PlayerBalance> {
+  const data = getData();
+  const current = getPlayerBalance(address);
+  
+  const updated: PlayerBalance = {
+    ...current,
+    balance: current.balance + amount,
+    totalDeposited: type === 'deposit' ? current.totalDeposited + amount : current.totalDeposited,
+    lastUpdated: Date.now(),
+  };
+  
+  data.playerBalances[address] = updated;
+  await saveData(data);
+  
+  console.log(`💰 Added ${amount} USDC to ${address} (${type}), new balance: ${updated.balance}`);
+  return updated;
+}
+
+/**
+ * Deduct balance (bet or withdrawal)
+ */
+export async function deductBalance(
+  address: string,
+  amount: number,
+  type: 'bet' | 'withdrawal'
+): Promise<PlayerBalance> {
+  const data = getData();
+  const current = getPlayerBalance(address);
+  
+  if (current.balance < amount) {
+    throw new Error(`Insufficient balance: have ${current.balance}, need ${amount}`);
+  }
+  
+  const updated: PlayerBalance = {
+    ...current,
+    balance: current.balance - amount,
+    totalWithdrawn: type === 'withdrawal' ? current.totalWithdrawn + amount : current.totalWithdrawn,
+    lastUpdated: Date.now(),
+  };
+  
+  data.playerBalances[address] = updated;
+  await saveData(data);
+  
+  console.log(`💸 Deducted ${amount} USDC from ${address} (${type}), new balance: ${updated.balance}`);
+  return updated;
+}
+
+/**
+ * Add pending prize (to be claimed later)
+ */
+export async function addPendingPrize(
+  address: string,
+  amount: number
+): Promise<PlayerBalance> {
+  const data = getData();
+  const current = getPlayerBalance(address);
+  
+  const updated: PlayerBalance = {
+    ...current,
+    pendingPrizes: current.pendingPrizes + amount,
+    lastUpdated: Date.now(),
+  };
+  
+  data.playerBalances[address] = updated;
+  await saveData(data);
+  
+  console.log(`🎁 Added ${amount} USDC pending prize for ${address}, total pending: ${updated.pendingPrizes}`);
+  return updated;
+}
+
+/**
+ * Approve pending prize (move to balance)
+ */
+export async function approvePendingPrize(
+  address: string,
+  amount: number
+): Promise<PlayerBalance> {
+  const data = getData();
+  const current = getPlayerBalance(address);
+  
+  if (current.pendingPrizes < amount) {
+    throw new Error(`Insufficient pending prizes: have ${current.pendingPrizes}, trying to approve ${amount}`);
+  }
+  
+  const updated: PlayerBalance = {
+    ...current,
+    balance: current.balance + amount,
+    pendingPrizes: current.pendingPrizes - amount,
+    lastUpdated: Date.now(),
+  };
+  
+  data.playerBalances[address] = updated;
+  await saveData(data);
+  
+  console.log(`✅ Approved ${amount} USDC prize for ${address}, new balance: ${updated.balance}`);
+  return updated;
 }
 
 

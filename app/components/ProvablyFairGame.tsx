@@ -23,8 +23,8 @@ import FairnessVerification from './FairnessVerification';
 import Leaderboard from './Leaderboard';
 import Profile from './Profile';
 import UsernameModal from './UsernameModal';
-import { getUserBalance, getTotalAvailableBalance, approvePendingPrize } from '../utils/balanceManager';
 import { getPendingDistributionsForAddress } from '../utils/prizeDistribution';
+// Removed: getUserBalance, getTotalAvailableBalance, approvePendingPrize - now server-authoritative
 import { useUSDCPayment } from '../hooks/useUSDCPayment';
 
 export default function ProvablyFairGame() {
@@ -105,49 +105,94 @@ export default function ProvablyFairGame() {
     }
   }, [address]);
   
-  // Save username to localStorage
-  const handleSaveUsername = (newUsername: string) => {
-    if (typeof window !== 'undefined' && address) {
-      localStorage.setItem(`username_${address}`, newUsername);
-      setUsername(newUsername);
-      setShowUsernameModal(false);
+  // Save username to server
+  const handleSaveUsername = async (newUsername: string) => {
+    if (!address || !isConnected) return;
+    
+    try {
+      console.log('📤 Saving username to server:', newUsername);
       
-      console.log('✅ Username saved:', newUsername, 'for address:', address);
+      const response = await fetch('/api/game', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action: 'setUsername',
+          address,
+          username: newUsername,
+        }),
+      });
       
-      // Re-sync stats with new username immediately
-      savePlayerStats(playerStats);
+      const result = await response.json();
+      
+      if (result.success) {
+        setUsername(newUsername);
+        setShowUsernameModal(false);
+        console.log('✅ Username saved to server:', newUsername);
+      }
+    } catch (error) {
+      console.error('❌ Error saving username:', error);
     }
   };
   
-  // Reload stats when mode changes
+  // Reload stats from server when mode changes
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem(getStatsKey());
-      setPlayerStats(saved ? JSON.parse(saved) : { totalPulls: 0, totalDeaths: 0, maxStreak: 0 });
+    if (address && isConnected) {
+      fetchPlayerStats();
+    } else {
+      // Reset to zero if disconnected
+      setPlayerStats({ totalPulls: 0, totalDeaths: 0, maxStreak: 0 });
     }
-  }, [isFreeModePlayer, address]);
+  }, [isFreeModePlayer, address, isConnected]);
   
-  // Balance management
-  const [userBalance, setUserBalance] = useState(0); // USDC balance in game
-  const [pendingPrizes, setPendingPrizes] = useState(0); // Pending prize amount
+  // SERVER-AUTHORITATIVE Balance management
+  const [userBalance, setUserBalance] = useState(0); // USDC balance (from server)
+  const [pendingPrizes, setPendingPrizes] = useState(0); // Pending prizes (from server)
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [showPendingPrizesModal, setShowPendingPrizesModal] = useState(false);
   
-  // Handle deposit success (after userBalance is declared)
+  // Handle deposit success - record on server
   useEffect(() => {
-    if (isDepositSuccess && depositHash) {
-      // Transaction confirmed, update balance
-      const depositAmount = parseFloat(localStorage.getItem(`lastDepositAmount_${address}`) || '0');
-      if (depositAmount > 0) {
-        setUserBalance(userBalance + depositAmount);
-        localStorage.setItem(`balance_${address}`, (userBalance + depositAmount).toString());
-        localStorage.removeItem(`lastDepositAmount_${address}`);
-        setShowDepositModal(false);
-        alert(`✅ Deposited ${depositAmount} USDC successfully!`);
-      }
+    if (isDepositSuccess && depositHash && address) {
+      const recordDeposit = async () => {
+        try {
+          const depositAmount = parseFloat(localStorage.getItem(`lastDepositAmount_${address}`) || '0');
+          if (depositAmount <= 0) return;
+
+          console.log('📤 Recording deposit on server:', depositAmount, 'USDC');
+          
+          const response = await fetch('/api/game', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'deposit',
+              address,
+              amount: depositAmount,
+            }),
+          });
+
+          const result = await response.json();
+          
+          if (result.success) {
+            console.log('✅ Deposit recorded on server:', result.balance);
+            setUserBalance(result.balance.balance);
+            setPendingPrizes(result.balance.pendingPrizes);
+            localStorage.removeItem(`lastDepositAmount_${address}`);
+            setShowDepositModal(false);
+            alert(`✅ Deposited ${depositAmount} USDC successfully!`);
+          } else {
+            console.error('❌ Failed to record deposit:', result.error);
+          }
+        } catch (error) {
+          console.error('❌ Error recording deposit:', error);
+        }
+      };
+      
+      recordDeposit();
     }
-  }, [isDepositSuccess, depositHash, address, userBalance]);
+  }, [isDepositSuccess, depositHash, address]);
   
   // Handle payment success
   useEffect(() => {
@@ -210,16 +255,11 @@ export default function ProvablyFairGame() {
   const [showDecisionUI, setShowDecisionUI] = useState(false);
   const [runLockedIn, setRunLockedIn] = useState(false);
   
-  // Player stats for leaderboard - separate for free and paid
-  const getStatsKey = () => {
-    const mode = isFreeModePlayer ? 'free' : 'paid';
-    return `stats_${mode}_${address || 'guest'}`;
-  };
-  
-  const [playerStats, setPlayerStats] = useState(() => {
-    if (typeof window === 'undefined') return { totalPulls: 0, totalDeaths: 0, maxStreak: 0 };
-    const saved = localStorage.getItem(getStatsKey());
-    return saved ? JSON.parse(saved) : { totalPulls: 0, totalDeaths: 0, maxStreak: 0 };
+  // Player stats - loaded from server (server is source of truth)
+  const [playerStats, setPlayerStats] = useState({
+    totalPulls: 0,
+    totalDeaths: 0,
+    maxStreak: 0,
   });
 
   // Preload and prepare all sounds for INSTANT playback
@@ -363,72 +403,105 @@ export default function ProvablyFairGame() {
     }, 2000);
   };
 
-  // Load user balance and pending prizes from storage/API
+  // Load balance from server (SERVER IS SOURCE OF TRUTH)
+  const fetchBalance = async () => {
+    if (!address || !isConnected) return;
+    
+    try {
+      console.log('💰 Fetching balance from server for', address);
+      const response = await fetch(`/api/game?action=balance&address=${address}`);
+      const data = await response.json();
+      
+      if (data.balance) {
+        setUserBalance(data.balance.balance || 0);
+        setPendingPrizes(data.balance.pendingPrizes || 0);
+        console.log('✅ Balance loaded:', data.balance);
+      }
+    } catch (error) {
+      console.error('❌ Error fetching balance:', error);
+    }
+  };
+
+  // Fetch balance on mount and when address changes
   useEffect(() => {
     if (address && isConnected) {
-      const balanceData = getUserBalance(address);
-      setUserBalance(balanceData.balance);
-      setPendingPrizes(balanceData.pendingPrizes);
-
-      // Also fetch from API
-      fetch(`/api/game?action=pendingPrizes&address=${address}`)
-        .then(res => res.json())
-        .then(data => {
-          if (data.pendingPrizes) {
-            setPendingPrizes(data.pendingPrizes);
-            // Update localStorage
-            localStorage.setItem(`pending_prizes_${address}`, data.pendingPrizes.toString());
-          }
-        })
-        .catch(err => console.error('Error fetching pending prizes:', err));
+      fetchBalance();
+    } else {
+      // Reset balance when disconnected
+      setUserBalance(0);
+      setPendingPrizes(0);
     }
   }, [address, isConnected]);
 
-  // Save player stats - separate for free and paid
-  const savePlayerStats = async (stats: typeof playerStats) => {
-    setPlayerStats(stats);
-    localStorage.setItem(getStatsKey(), JSON.stringify(stats));
-    
-    // Sync to API for global leaderboard (only if wallet is connected)
-    if (address && isConnected) {
-      try {
-        console.log('📤 Syncing stats to API:', {
+  // ========================================
+  // SERVER-AUTHORITATIVE EVENT API CALLS
+  // ========================================
+  
+  const sendGameEvent = async (action: 'triggerPull' | 'death' | 'cashout') => {
+    if (!address || !isConnected) {
+      console.log('⚠️ Not connected, skipping server sync');
+      return;
+    }
+
+    try {
+      console.log(`📤 Sending event: ${action} for ${address}`);
+      
+      const response = await fetch('/api/game', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action,
           address,
-          username,
-          stats: {
-            triggerPulls: stats.totalPulls,
-            deaths: stats.totalDeaths,
-            maxStreak: stats.maxStreak,
-            isPaid: !isFreeModePlayer,
-          }
+        }),
+      });
+      
+      const result = await response.json();
+      console.log(`✅ Event ${action} recorded:`, result.stats);
+      
+      // Update local state with server response (server is source of truth)
+      if (result.stats) {
+        setPlayerStats({
+          totalPulls: result.stats.triggerPulls || 0,
+          totalDeaths: result.stats.deaths || 0,
+          maxStreak: result.stats.maxStreak || 0,
         });
-        
-        const response = await fetch('/api/game', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            action: 'updateStats',
-            address,
-            username: username || undefined, // Include username if set
-            stats: {
-              triggerPulls: stats.totalPulls,
-              deaths: stats.totalDeaths,
-              maxStreak: stats.maxStreak,
-              isPaid: !isFreeModePlayer,
-            },
-          }),
-        });
-        
-        const result = await response.json();
-        console.log('✅ Stats synced:', result);
-      } catch (error) {
-        console.error('Error syncing stats to API:', error);
-        // Don't block the UI if API sync fails
       }
+      
+      return result.stats;
+    } catch (error) {
+      console.error(`❌ Error sending ${action} event:`, error);
     }
   };
+
+  // Fetch stats from server (read-only, server is source of truth)
+  const fetchPlayerStats = async () => {
+    if (!address || !isConnected) return;
+    
+    try {
+      const response = await fetch(`/api/game?action=stats&address=${address}`);
+      const result = await response.json();
+      
+      if (result.stats) {
+        console.log('📊 Stats loaded from server:', result.stats);
+        setPlayerStats({
+          totalPulls: result.stats.triggerPulls || 0,
+          totalDeaths: result.stats.deaths || 0,
+          maxStreak: result.stats.maxStreak || 0,
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching stats:', error);
+    }
+  };
+
+  // Load stats from server on mount
+  useEffect(() => {
+    if (address && isConnected) {
+      fetchPlayerStats();
+    }
+  }, [address, isConnected]);
 
   // Calculate leaderboard score
   const calculateScore = (maxStreak: number, totalPulls: number, totalDeaths: number) => {
@@ -436,53 +509,41 @@ export default function ProvablyFairGame() {
     return maxStreak * riskMultiplier;
   };
 
-  // Save balance to storage
-  const saveBalance = (newBalance: number) => {
-    setUserBalance(newBalance);
-    if (address) {
-      localStorage.setItem(`balance_${address}`, newBalance.toString());
-    }
-  };
+  // Balance operations now handled by server
+  // No need to save locally - server is source of truth
 
   // Approve pending prize (move to balance)
   const handleApprovePendingPrize = async (amount: number) => {
     if (!address) return;
 
     try {
-      // Get pending distributions
-      const pending = getPendingDistributionsForAddress(address);
-      if (pending.length === 0) {
-        alert('No pending prizes to approve');
-        return;
-      }
-
-      // Approve the first pending distribution
-      const dist = pending[0];
+      console.log('📤 Approving prize on server:', amount, 'USDC');
       
-      // Call API to approve
+      // Call server API to approve prize
       const response = await fetch('/api/game', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'approveDistribution',
-          distributionId: dist.distributionId,
-          address: address,
+          action: 'approvePrize',
+          address,
+          amount,
         }),
       });
 
-      if (response.ok) {
-        // Move from pending to balance
-        approvePendingPrize(address, dist.amount);
-        setUserBalance(userBalance + dist.amount);
-        setPendingPrizes(pendingPrizes - dist.amount);
+      const result = await response.json();
+      
+      if (result.success) {
+        console.log('✅ Prize approved on server:', result.balance);
+        // Update local state from server response
+        setUserBalance(result.balance.balance);
+        setPendingPrizes(result.balance.pendingPrizes);
         setShowPendingPrizesModal(false);
-        alert(`✅ Approved ${dist.amount.toFixed(2)} USDC prize! Added to your balance.`);
+        alert(`✅ Approved ${amount.toFixed(2)} USDC prize! Added to your balance.`);
       } else {
-        const error = await response.json();
-        alert(`Error: ${error.error || 'Failed to approve prize'}`);
+        alert(`Error: ${result.error || 'Failed to approve prize'}`);
       }
     } catch (error) {
-      console.error('Error approving prize:', error);
+      console.error('❌ Error approving prize:', error);
       alert('Failed to approve prize. Please try again.');
     }
   };
@@ -589,8 +650,31 @@ export default function ProvablyFairGame() {
       const data = await response.json();
 
       if (response.ok) {
-        // Deduct from local balance immediately (will be sent manually)
-        saveBalance(userBalance - amount);
+        // Record withdrawal on server (deduct balance)
+        try {
+          console.log('📤 Recording withdrawal on server:', amount, 'USDC');
+          
+          const balanceResponse = await fetch('/api/game', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'withdraw',
+              address,
+              amount,
+            }),
+          });
+
+          const balanceResult = await balanceResponse.json();
+          
+          if (balanceResult.success) {
+            console.log('✅ Withdrawal recorded on server:', balanceResult.balance);
+            setUserBalance(balanceResult.balance.balance);
+            setPendingPrizes(balanceResult.balance.pendingPrizes);
+          }
+        } catch (error) {
+          console.error('❌ Error recording withdrawal on server:', error);
+        }
+        
         setShowWithdrawModal(false);
         alert(`✅ Withdrawal request submitted!\n\nAmount: ${amount.toFixed(2)} USDC\nRequest ID: ${data.requestId}\n\nYour withdrawal will be processed manually. Check your wallet in 24-48 hours.`);
         console.log('📝 Withdrawal request submitted:', data.requestId);
@@ -710,18 +794,10 @@ export default function ProvablyFairGame() {
     setCylinderRotation(prev => prev + 45);
     
     if (isHit) {
-      // DEATH - Update stats
-      const runStreak = currentRunSafePulls;
-      const newMaxStreak = Math.max(playerStats.maxStreak, runStreak);
-      const newTotalDeaths = playerStats.totalDeaths + 1;
+      // DEATH - Send event to server (server calculates stats)
+      sendGameEvent('death');
       
-      savePlayerStats({
-        totalPulls: newTotalPulls,
-        totalDeaths: newTotalDeaths,
-        maxStreak: newMaxStreak,
-      });
-      
-      console.log('📊 Stats updated:', { runStreak, newMaxStreak, deaths: newTotalDeaths, pulls: newTotalPulls });
+      console.log('💀 Death event sent to server');
       
       // Auto-close video after max 3 seconds if it's still showing (safety timeout)
       const videoTimeout = setTimeout(() => {
@@ -757,15 +833,14 @@ export default function ProvablyFairGame() {
     } else {
       // CLICK - survived (sound already played above)
       
+      // Send trigger pull event to server (server increments counter)
+      sendGameEvent('triggerPull');
+      
       // Increment safe pulls for this run
       const newSafePulls = currentRunSafePulls + 1;
       setCurrentRunSafePulls(newSafePulls);
       
-      // Update total pulls stat
-      savePlayerStats({
-        ...playerStats,
-        totalPulls: newTotalPulls,
-      });
+      console.log('🔫 Trigger pull event sent to server');
       
       // Check for decision point at 7 pulls
       if (newSafePulls === 7 && !runLockedIn) {
@@ -787,14 +862,9 @@ export default function ProvablyFairGame() {
   const handleCashOut = () => {
     console.log('💰 Cash out at 7');
     
-    // Update max streak if 7 is better
-    const newMaxStreak = Math.max(playerStats.maxStreak, 7);
-    const updatedStats = {
-      ...playerStats,
-      maxStreak: newMaxStreak,
-    };
+    // Send cashout event to server (server updates maxStreak to 7)
+    sendGameEvent('cashout');
     
-    savePlayerStats(updatedStats);
     setShowDecisionUI(false);
     
     // End run - reset game state completely

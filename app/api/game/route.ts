@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { calculatePrizeDistributionForLeaderboard, saveDistributionLog, getDistributionLogs, PrizeDistribution } from '../../utils/prizeDistribution';
-import { getData, updateLeaderboardEntry, updatePlayerStats, getPlayerStats, updatePrizePool, initStorage } from '../../lib/storage';
+import { getData, updateLeaderboardEntry, updatePlayerStats, getPlayerStats, updatePrizePool, initStorage, getPlayerBalance, addBalance, deductBalance, addPendingPrize as addPendingPrizeStorage, approvePendingPrize as approvePendingPrizeStorage } from '../../lib/storage';
 
 interface LeaderboardEntry {
   address: string;
@@ -58,24 +58,22 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ stats: stats || null });
   }
 
+  if (action === 'balance' && address) {
+    // SERVER-AUTHORITATIVE: Get balance from Edge Config
+    const balance = getPlayerBalance(address);
+    console.log('💰 Balance fetched for', address, ':', balance);
+    return NextResponse.json({ balance });
+  }
+
   if (action === 'prizepool') {
     return NextResponse.json({ prizePool: data.prizePool });
   }
 
   if (action === 'pendingPrizes' && address) {
-    // Get pending prizes for address from logs
-    const logs = getDistributionLogs();
-    let totalPending = 0;
-    
-    logs.forEach(log => {
-      log.distributions.forEach(dist => {
-        if (dist.address.toLowerCase() === address.toLowerCase() && dist.status === 'pending') {
-          totalPending += dist.amount;
-        }
-      });
-    });
-
-    return NextResponse.json({ pendingPrizes: totalPending });
+    // Get pending prizes from server storage
+    const balance = getPlayerBalance(address);
+    console.log('🎁 Pending prizes for', address, ':', balance.pendingPrizes);
+    return NextResponse.json({ pendingPrizes: balance.pendingPrizes });
   }
 
   if (action === 'distributionLogs') {
@@ -91,38 +89,159 @@ export async function POST(request: NextRequest) {
   
   try {
     const body = await request.json();
-    const { action, address, stats, username } = body;
+    const { action, address, username } = body;
 
-    if (action === 'updateStats') {
-      if (!address || !stats) {
-        return NextResponse.json({ error: 'Missing data' }, { status: 400 });
+    // ========================================
+    // SERVER-AUTHORITATIVE GAME EVENTS
+    // ========================================
+    
+    if (action === 'triggerPull') {
+      // Server increments trigger pulls
+      if (!address) {
+        return NextResponse.json({ error: 'Missing address' }, { status: 400 });
       }
 
-      // Get existing stats
       const existingStats = getPlayerStats(address) || {
         address,
         triggerPulls: 0,
         deaths: 0,
         maxStreak: 0,
+        currentStreak: 0,
         lastPlayed: Date.now(),
         isPaid: false,
       };
 
       const updatedStats = {
         ...existingStats,
-        triggerPulls: stats.triggerPulls || existingStats.triggerPulls,
-        deaths: stats.deaths || existingStats.deaths,
-        maxStreak: stats.maxStreak !== undefined ? Math.max(existingStats.maxStreak || 0, stats.maxStreak) : (existingStats.maxStreak || 0),
+        triggerPulls: (existingStats.triggerPulls || 0) + 1,
+        currentStreak: (existingStats.currentStreak || 0) + 1,
         lastPlayed: Date.now(),
-        isPaid: stats.isPaid !== undefined ? stats.isPaid : existingStats.isPaid,
-        username: username || existingStats.username, // Save username if provided
       };
 
-      // Save player stats
       await updatePlayerStats(address, updatedStats);
-      console.log('💾 Player stats saved for', address);
+      await updateLeaderboardEntry(
+        updatedStats.isPaid ? 'paid' : 'free',
+        {
+          address: updatedStats.address,
+          username: updatedStats.username || existingStats.username,
+          triggerPulls: updatedStats.triggerPulls,
+          deaths: updatedStats.deaths || 0,
+          maxStreak: updatedStats.maxStreak || 0,
+          isPaid: updatedStats.isPaid,
+          lastPlayed: updatedStats.lastPlayed,
+        }
+      );
 
-      // Update leaderboard
+      console.log('🔫 Trigger pull recorded:', address, 'pulls:', updatedStats.triggerPulls);
+      return NextResponse.json({ success: true, stats: updatedStats });
+    }
+
+    if (action === 'death') {
+      // Server records death and resets streak
+      if (!address) {
+        return NextResponse.json({ error: 'Missing address' }, { status: 400 });
+      }
+
+      const existingStats = getPlayerStats(address) || {
+        address,
+        triggerPulls: 0,
+        deaths: 0,
+        maxStreak: 0,
+        currentStreak: 0,
+        lastPlayed: Date.now(),
+        isPaid: false,
+      };
+
+      const updatedStats = {
+        ...existingStats,
+        deaths: (existingStats.deaths || 0) + 1,
+        maxStreak: Math.max(existingStats.maxStreak || 0, existingStats.currentStreak || 0),
+        currentStreak: 0, // Reset on death
+        lastPlayed: Date.now(),
+      };
+
+      await updatePlayerStats(address, updatedStats);
+      await updateLeaderboardEntry(
+        updatedStats.isPaid ? 'paid' : 'free',
+        {
+          address: updatedStats.address,
+          username: updatedStats.username || existingStats.username,
+          triggerPulls: updatedStats.triggerPulls || 0,
+          deaths: updatedStats.deaths,
+          maxStreak: updatedStats.maxStreak,
+          isPaid: updatedStats.isPaid,
+          lastPlayed: updatedStats.lastPlayed,
+        }
+      );
+
+      console.log('💀 Death recorded:', address, 'deaths:', updatedStats.deaths, 'maxStreak:', updatedStats.maxStreak);
+      return NextResponse.json({ success: true, stats: updatedStats });
+    }
+
+    if (action === 'cashout') {
+      // Server records cashout at 7 pulls
+      if (!address) {
+        return NextResponse.json({ error: 'Missing address' }, { status: 400 });
+      }
+
+      const existingStats = getPlayerStats(address) || {
+        address,
+        triggerPulls: 0,
+        deaths: 0,
+        maxStreak: 0,
+        currentStreak: 0,
+        lastPlayed: Date.now(),
+        isPaid: false,
+      };
+
+      const updatedStats = {
+        ...existingStats,
+        maxStreak: Math.max(existingStats.maxStreak || 0, 7), // Cash out at 7
+        currentStreak: 0, // Reset after cashout
+        lastPlayed: Date.now(),
+      };
+
+      await updatePlayerStats(address, updatedStats);
+      await updateLeaderboardEntry(
+        updatedStats.isPaid ? 'paid' : 'free',
+        {
+          address: updatedStats.address,
+          username: updatedStats.username || existingStats.username,
+          triggerPulls: updatedStats.triggerPulls || 0,
+          deaths: updatedStats.deaths || 0,
+          maxStreak: updatedStats.maxStreak,
+          isPaid: updatedStats.isPaid,
+          lastPlayed: updatedStats.lastPlayed,
+        }
+      );
+
+      console.log('💰 Cashout recorded:', address, 'maxStreak:', updatedStats.maxStreak);
+      return NextResponse.json({ success: true, stats: updatedStats });
+    }
+
+    if (action === 'setUsername') {
+      // Update username only
+      if (!address || !username) {
+        return NextResponse.json({ error: 'Missing address or username' }, { status: 400 });
+      }
+
+      const existingStats = getPlayerStats(address) || {
+        address,
+        triggerPulls: 0,
+        deaths: 0,
+        maxStreak: 0,
+        currentStreak: 0,
+        lastPlayed: Date.now(),
+        isPaid: false,
+      };
+
+      const updatedStats = {
+        ...existingStats,
+        username,
+        lastPlayed: Date.now(),
+      };
+
+      await updatePlayerStats(address, updatedStats);
       await updateLeaderboardEntry(
         updatedStats.isPaid ? 'paid' : 'free',
         {
@@ -131,12 +250,12 @@ export async function POST(request: NextRequest) {
           triggerPulls: updatedStats.triggerPulls || 0,
           deaths: updatedStats.deaths || 0,
           maxStreak: updatedStats.maxStreak || 0,
-          isPaid: updatedStats.isPaid || false,
-          lastPlayed: updatedStats.lastPlayed || Date.now(),
+          isPaid: updatedStats.isPaid,
+          lastPlayed: updatedStats.lastPlayed,
         }
       );
-      console.log('🏆 Leaderboard updated for', address, 'mode:', updatedStats.isPaid ? 'paid' : 'free');
 
+      console.log('✏️ Username updated:', address, username);
       return NextResponse.json({ success: true, stats: updatedStats });
     }
 
@@ -268,6 +387,68 @@ export async function POST(request: NextRequest) {
       }
 
       return NextResponse.json({ success: true, logs });
+    }
+
+    // ========================================
+    // SERVER-AUTHORITATIVE BALANCE OPERATIONS
+    // ========================================
+
+    if (action === 'deposit') {
+      // Record deposit in server storage
+      const { amount } = body;
+      
+      if (!address || !amount || amount <= 0) {
+        return NextResponse.json({ error: 'Invalid deposit data' }, { status: 400 });
+      }
+
+      try {
+        const updated = await addBalance(address, amount, 'deposit');
+        console.log('💰 Deposit recorded:', address, amount, 'USDC');
+        return NextResponse.json({ success: true, balance: updated });
+      } catch (error) {
+        console.error('Error recording deposit:', error);
+        return NextResponse.json({ error: 'Failed to record deposit' }, { status: 500 });
+      }
+    }
+
+    if (action === 'withdraw') {
+      // Record withdrawal in server storage
+      const { amount } = body;
+      
+      if (!address || !amount || amount <= 0) {
+        return NextResponse.json({ error: 'Invalid withdrawal data' }, { status: 400 });
+      }
+
+      try {
+        const updated = await deductBalance(address, amount, 'withdrawal');
+        console.log('💸 Withdrawal recorded:', address, amount, 'USDC');
+        return NextResponse.json({ success: true, balance: updated });
+      } catch (error: any) {
+        console.error('Error recording withdrawal:', error);
+        return NextResponse.json({ 
+          error: error.message || 'Failed to record withdrawal' 
+        }, { status: 400 });
+      }
+    }
+
+    if (action === 'approvePrize') {
+      // Approve pending prize (move to balance)
+      const { amount } = body;
+      
+      if (!address || !amount || amount <= 0) {
+        return NextResponse.json({ error: 'Invalid prize approval data' }, { status: 400 });
+      }
+
+      try {
+        const updated = await approvePendingPrizeStorage(address, amount);
+        console.log('✅ Prize approved:', address, amount, 'USDC');
+        return NextResponse.json({ success: true, balance: updated });
+      } catch (error: any) {
+        console.error('Error approving prize:', error);
+        return NextResponse.json({ 
+          error: error.message || 'Failed to approve prize' 
+        }, { status: 400 });
+      }
     }
 
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
