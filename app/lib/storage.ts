@@ -98,8 +98,52 @@ export async function loadData(): Promise<StorageData> {
 
 /**
  * Save data to Edge Config
+ * ✅ PRODUCTION SAFETY: Validates data before writing
  */
 export async function saveData(data: StorageData): Promise<void> {
+  // ✅ SAFETY GUARD #1: Validate data structure
+  if (!data || typeof data !== 'object') {
+    console.error('❌ BLOCKED: Invalid data structure (not an object)');
+    return;
+  }
+  
+  if (!data.leaderboard || !data.prizePool || !data.playerStats || !data.playerBalances) {
+    console.error('❌ BLOCKED: Missing required fields in data structure', {
+      hasLeaderboard: !!data.leaderboard,
+      hasPrizePool: !!data.prizePool,
+      hasPlayerStats: !!data.playerStats,
+      hasPlayerBalances: !!data.playerBalances
+    });
+    return;
+  }
+  
+  // ✅ SAFETY GUARD #2: Check if we're about to wipe existing data
+  const totalEntries = (data.leaderboard.free?.length || 0) + (data.leaderboard.paid?.length || 0);
+  const playerStatsCount = Object.keys(data.playerStats || {}).length;
+  const playerBalancesCount = Object.keys(data.playerBalances || {}).length;
+  
+  // If Edge Config has data but we're trying to save empty data, warn and block
+  try {
+    const currentData = await get<StorageData>('game-data');
+    if (currentData) {
+      const currentEntries = (currentData.leaderboard?.free?.length || 0) + (currentData.leaderboard?.paid?.length || 0);
+      const currentStats = Object.keys(currentData.playerStats || {}).length;
+      
+      if (currentEntries > 0 && totalEntries === 0 && currentStats > 0) {
+        console.error('🚨 BLOCKED: Attempting to overwrite existing data with EMPTY leaderboard!', {
+          currentEntries,
+          newEntries: totalEntries,
+          currentStats,
+          newStats: playerStatsCount
+        });
+        console.error('🚨 This would DELETE all leaderboard data! Write rejected.');
+        return;
+      }
+    }
+  } catch (error) {
+    console.warn('⚠️ Could not verify current data, proceeding with write');
+  }
+  
   // Update cache immediately
   cachedData = data;
   lastFetch = Date.now();
@@ -117,6 +161,7 @@ export async function saveData(data: StorageData): Promise<void> {
       freeLeaderboard: data.leaderboard?.free?.length || 0,
       paidLeaderboard: data.leaderboard?.paid?.length || 0,
       playerStats: Object.keys(data.playerStats || {}).length,
+      playerBalances: Object.keys(data.playerBalances || {}).length,
     });
     
     // Save directly to Edge Config via Vercel API
