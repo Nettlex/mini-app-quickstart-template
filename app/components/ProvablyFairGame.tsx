@@ -153,7 +153,7 @@ export default function ProvablyFairGame() {
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [showPendingPrizesModal, setShowPendingPrizesModal] = useState(false);
   
-  // Handle deposit success - record on server
+  // Handle deposit success - record on server with transaction hash as proof
   useEffect(() => {
     if (isDepositSuccess && depositHash && address) {
       const recordDeposit = async () => {
@@ -161,7 +161,7 @@ export default function ProvablyFairGame() {
           const depositAmount = parseFloat(localStorage.getItem(`lastDepositAmount_${address}`) || '0');
           if (depositAmount <= 0) return;
 
-          console.log('📤 Recording deposit on server:', depositAmount, 'USDC');
+          console.log('📤 Recording deposit on server with tx hash:', depositHash);
           
           const response = await fetch('/api/game', {
             method: 'POST',
@@ -169,24 +169,28 @@ export default function ProvablyFairGame() {
             body: JSON.stringify({
               action: 'deposit',
               address,
-              amount: depositAmount,
+              transactionHash: depositHash, // ✅ Send transaction hash as proof
+              expectedAmount: depositAmount, // Server will verify this matches on-chain
             }),
           });
 
           const result = await response.json();
           
           if (result.success) {
-            console.log('✅ Deposit recorded on server:', result.balance);
+            console.log('✅ Deposit verified and recorded on server:', result.balance);
             setUserBalance(result.balance.balance);
             setPendingPrizes(result.balance.pendingPrizes);
             localStorage.removeItem(`lastDepositAmount_${address}`);
             setShowDepositModal(false);
-            alert(`✅ Deposited ${depositAmount} USDC successfully!`);
+            alert(`✅ Deposit confirmed! ${result.verifiedAmount.toFixed(2)} USDC added to your balance.`);
           } else {
-            console.error('❌ Failed to record deposit:', result.error);
+            console.error('❌ Deposit verification failed:', result.error);
+            alert(`❌ Deposit verification failed: ${result.error}`);
+            localStorage.removeItem(`lastDepositAmount_${address}`);
           }
         } catch (error) {
           console.error('❌ Error recording deposit:', error);
+          alert('❌ Error recording deposit. Please contact support with your transaction hash: ' + depositHash);
         }
       };
       

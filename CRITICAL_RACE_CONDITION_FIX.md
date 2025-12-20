@@ -286,3 +286,4 @@ curl "https://your-app.vercel.app/api/game?action=leaderboard"
 
 **Next:** Implement the fix by removing getData() calls and using atomic operations.
 
+

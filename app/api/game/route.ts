@@ -1,9 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { calculatePrizeDistributionForLeaderboard, saveDistributionLog, getDistributionLogs, PrizeDistribution } from '../../utils/prizeDistribution';
 import { loadData, updateLeaderboardEntry, updatePlayerStats, getPlayerStats, updatePrizePool, initStorage, getPlayerBalance, addBalance, deductBalance, addPendingPrize as addPendingPrizeStorage, approvePendingPrize as approvePendingPrizeStorage } from '../../lib/storage';
+import { createPublicClient, http, decodeEventLog, parseAbi } from 'viem';
+import { base, baseSepolia } from 'viem/chains';
 
 // ✅ FIX: Force Node.js runtime (Edge runtime is stateless and loses data!)
 export const runtime = 'nodejs';
+
+// Setup viem client for on-chain verification
+const chain = process.env.NEXT_PUBLIC_CHAIN === 'mainnet' ? base : baseSepolia;
+const publicClient = createPublicClient({
+  chain,
+  transport: http(),
+});
+
+// USDC contract addresses
+const USDC_ADDRESS = process.env.NEXT_PUBLIC_CHAIN === 'mainnet'
+  ? '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
+  : '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
+
+const DEPOSIT_WALLET = process.env.NEXT_PUBLIC_DEPOSIT_WALLET || process.env.NEXT_PUBLIC_PRIZE_POOL_WALLET;
 
 interface LeaderboardEntry {
   address: string;
@@ -400,20 +416,94 @@ export async function POST(request: NextRequest) {
     // ========================================
 
     if (action === 'deposit') {
-      // Record deposit in server storage
-      const { amount } = body;
+      // ✅ SECURE: Verify transaction on-chain before crediting balance
+      const { transactionHash, expectedAmount } = body;
       
-      if (!address || !amount || amount <= 0) {
-        return NextResponse.json({ error: 'Invalid deposit data' }, { status: 400 });
+      if (!address || !transactionHash) {
+        return NextResponse.json({ error: 'Missing transaction hash' }, { status: 400 });
       }
 
       try {
-        const updated = await addBalance(address, amount, 'deposit');
-        console.log('💰 Deposit recorded:', address, amount, 'USDC');
-        return NextResponse.json({ success: true, balance: updated });
-      } catch (error) {
-        console.error('Error recording deposit:', error);
-        return NextResponse.json({ error: 'Failed to record deposit' }, { status: 500 });
+        console.log('🔍 Verifying deposit transaction:', transactionHash);
+        
+        // Get transaction receipt from blockchain
+        const receipt = await publicClient.getTransactionReceipt({
+          hash: transactionHash as `0x${string}`,
+        });
+
+        // Verify transaction was successful
+        if (receipt.status !== 'success') {
+          console.error('❌ Transaction failed on-chain');
+          return NextResponse.json({ error: 'Transaction failed on-chain' }, { status: 400 });
+        }
+
+        // Verify transaction is to USDC contract
+        if (receipt.to?.toLowerCase() !== USDC_ADDRESS.toLowerCase()) {
+          console.error('❌ Transaction is not to USDC contract');
+          return NextResponse.json({ error: 'Invalid transaction: not a USDC transfer' }, { status: 400 });
+        }
+
+        // Parse Transfer event from logs to get amount and recipient
+        const transferEventAbi = parseAbi(['event Transfer(address indexed from, address indexed to, uint256 value)']);
+        
+        let transferAmount = 0;
+        let transferTo = '';
+        let transferFrom = '';
+
+        for (const log of receipt.logs) {
+          if (log.address.toLowerCase() === USDC_ADDRESS.toLowerCase()) {
+            try {
+              const decoded = decodeEventLog({
+                abi: transferEventAbi,
+                data: log.data,
+                topics: log.topics,
+              });
+
+              if (decoded.eventName === 'Transfer') {
+                transferFrom = decoded.args.from as string;
+                transferTo = decoded.args.to as string;
+                transferAmount = Number(decoded.args.value) / 1_000_000; // USDC has 6 decimals
+                break;
+              }
+            } catch (e) {
+              // Skip logs that don't match Transfer event
+              continue;
+            }
+          }
+        }
+
+        // Verify the transfer is from the user
+        if (transferFrom.toLowerCase() !== address.toLowerCase()) {
+          console.error('❌ Transfer is not from the requesting user');
+          return NextResponse.json({ error: 'Invalid transaction: sender mismatch' }, { status: 400 });
+        }
+
+        // Verify the transfer is to the deposit wallet
+        if (transferTo.toLowerCase() !== DEPOSIT_WALLET?.toLowerCase()) {
+          console.error('❌ Transfer is not to the deposit wallet');
+          return NextResponse.json({ error: 'Invalid transaction: recipient mismatch' }, { status: 400 });
+        }
+
+        // Verify amount (allow small rounding differences)
+        if (expectedAmount && Math.abs(transferAmount - expectedAmount) > 0.01) {
+          console.warn(`⚠️ Amount mismatch: expected ${expectedAmount}, got ${transferAmount}`);
+        }
+
+        // ✅ Transaction verified! Credit balance
+        const updated = await addBalance(address, transferAmount, 'deposit');
+        console.log('✅ Deposit verified and recorded:', address, transferAmount, 'USDC');
+        
+        return NextResponse.json({ 
+          success: true, 
+          balance: updated,
+          verifiedAmount: transferAmount,
+          transactionHash 
+        });
+      } catch (error: any) {
+        console.error('❌ Error verifying deposit:', error);
+        return NextResponse.json({ 
+          error: error.message || 'Failed to verify deposit transaction' 
+        }, { status: 500 });
       }
     }
 
