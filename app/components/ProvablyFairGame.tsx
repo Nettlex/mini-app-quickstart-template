@@ -2505,27 +2505,6 @@ export default function ProvablyFairGame() {
         </AnimatePresence>
       </div>
       
-      {/* Notification Banner (alternative to alerts) */}
-      <AnimatePresence>
-        {notification && (
-          <motion.div
-            initial={{ opacity: 0, y: -50 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -50 }}
-            className="fixed top-20 left-1/2 transform -translate-x-1/2 z-[10000] max-w-md mx-4"
-          >
-            <div className={`px-6 py-4 rounded-lg shadow-2xl border-2 ${
-              notification.type === 'success'
-                ? 'bg-green-900 border-green-500 text-green-100'
-                : notification.type === 'error'
-                ? 'bg-red-900 border-red-500 text-red-100'
-                : 'bg-blue-900 border-blue-500 text-blue-100'
-            }`}>
-              <p className="text-center font-medium">{notification.message}</p>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
       </div>
     </>
   );
