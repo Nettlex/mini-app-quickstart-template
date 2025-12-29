@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { saveWithdrawalRequest, getWithdrawalsForAddress, getPendingWithdrawals, updateWithdrawalStatus } from '../../utils/withdrawalManager';
+import { isAdmin, unauthorizedResponse } from '../../lib/adminAuth';
 
 // ✅ FIX: Force Node.js runtime
 export const runtime = 'nodejs';
@@ -16,6 +17,11 @@ export async function GET(request: NextRequest) {
 
   // Admin endpoint to get all pending withdrawals
   if (action === 'pending') {
+    // ✅ SECURITY: Require admin authentication
+    if (!isAdmin(request)) {
+      return unauthorizedResponse();
+    }
+    
     const pending = getPendingWithdrawals();
     return NextResponse.json({ 
       withdrawals: pending,
@@ -71,6 +77,11 @@ export async function POST(request: NextRequest) {
 
     // Admin: Update withdrawal status
     if (action === 'update' && requestId && status) {
+      // ✅ SECURITY: Require admin authentication
+      if (!isAdmin(request)) {
+        return unauthorizedResponse();
+      }
+      
       const validStatuses = ['approved', 'rejected', 'completed'];
       if (!validStatuses.includes(status)) {
         return NextResponse.json({ error: 'Invalid status' }, { status: 400 });

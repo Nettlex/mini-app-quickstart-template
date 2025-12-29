@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { calculatePrizeDistributionForLeaderboard } from '../../../utils/prizeDistribution';
+import { isAdmin, unauthorizedResponse } from '../../../lib/adminAuth';
 import fs from 'fs';
 import path from 'path';
 
@@ -11,6 +12,11 @@ export const runtime = 'nodejs';
  * This should be called manually or via cron job
  */
 export async function POST(request: NextRequest) {
+  // ✅ SECURITY: Require admin authentication
+  if (!isAdmin(request)) {
+    return unauthorizedResponse();
+  }
+  
   try {
     // Get paid leaderboard from localStorage (client-side) or database
     // For now, we'll read from a shared state or require leaderboard data in request
@@ -97,6 +103,11 @@ export async function POST(request: NextRequest) {
  * GET endpoint to view distribution logs
  */
 export async function GET(request: NextRequest) {
+  // ✅ SECURITY: Require admin authentication
+  if (!isAdmin(request)) {
+    return unauthorizedResponse();
+  }
+  
   try {
     const logFile = path.join(process.cwd(), 'logs', 'prize_distributions.json');
     

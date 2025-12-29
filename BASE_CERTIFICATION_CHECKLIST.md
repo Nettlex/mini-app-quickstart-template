@@ -173,3 +173,4 @@ className={`${theme === 'dark' ? 'bg-gray-900' : 'bg-white'}`}
 - Edge Config provides persistent global storage
 - ETH and USDC deposits supported with on-chain verification
 
+

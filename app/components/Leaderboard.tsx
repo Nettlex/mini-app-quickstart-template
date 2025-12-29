@@ -85,8 +85,8 @@ export default function Leaderboard({ mode: initialMode }: { mode: 'free' | 'pai
   }, [currentMode, timeFrame]);
 
   return (
-    <div className="min-h-screen bg-black text-white p-4 max-w-md mx-auto w-full">
-      <div className="pt-4 pb-6">
+    <div className="min-h-screen bg-black text-white p-4 max-w-md mx-auto w-full overflow-y-auto">
+      <div className="pt-4 pb-20">
         <h1 className="text-3xl font-bold text-center text-yellow-400 mb-2">
           🏆 LEADERBOARD
         </h1>
@@ -137,7 +137,7 @@ export default function Leaderboard({ mode: initialMode }: { mode: 'free' | 'pai
       </div>
 
       {/* Leaderboard List */}
-      <div className="space-y-2">
+      <div className="space-y-2 pb-20">
         {loading ? (
           <div className="text-center py-12 text-gray-500">
             <p className="text-4xl mb-4 animate-pulse">⏳</p>

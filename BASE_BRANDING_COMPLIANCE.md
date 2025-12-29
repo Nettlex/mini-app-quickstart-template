@@ -313,3 +313,4 @@ All changes are live on Vercel! The app now fully complies with Base branding gu
 **Compliance Version**: 1.0  
 **Status**: ✅ Fully Compliant
 
+

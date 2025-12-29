@@ -50,10 +50,8 @@ export default function ProvablyFairGame() {
     
     sdk.context
       .then((context) => {
-        console.log('🟣 Farcaster SDK context:', context);
         if (context && context.user) {
           setIsInMiniapp(true);
-          console.log('✅ In Farcaster miniapp!');
           
           // Get wallet address
           const walletAddr = (context.user as any).custodyAddress || 
@@ -61,7 +59,6 @@ export default function ProvablyFairGame() {
                            (context.user as any).address;
           if (walletAddr) {
             setFarcasterAddress(walletAddr as string);
-            console.log('🎯 Farcaster wallet detected in game:', walletAddr);
           }
           
           // Get Farcaster profile data
@@ -74,15 +71,14 @@ export default function ProvablyFairGame() {
               fid: user.fid || 0,
             };
             setFarcasterProfile(profile);
-            console.log('👤 Farcaster profile loaded:', profile);
+            console.log('✅ Farcaster connected:', profile.displayName);
           }
         } else {
-          console.log('❌ No Farcaster context found');
           setIsInMiniapp(false);
         }
       })
       .catch((err) => {
-        console.log('❌ Not in Farcaster miniapp:', err);
+        // Silently handle - not in Farcaster context
         setIsInMiniapp(false);
       });
   }, []);
@@ -93,17 +89,21 @@ export default function ProvablyFairGame() {
   const { payEntryFee, isPending: isPaymentPending, isConfirming: isPaymentConfirming, isSuccess: isPaymentSuccess, error: paymentError, balance: usdcBalance } = useUSDCPayment(address);
   const { sendCalls, data: depositTxData, isPending: isDepositPending } = useSendCalls();
   
-  // 🔍 DEBUG: Log wallet connection status
+  // 🔍 DEBUG: Log wallet connection status (runs once on mount only)
+  const hasLoggedConnection = useRef(false);
   useEffect(() => {
-    console.log('🔍 Wallet Connection Status:', {
-      isInMiniapp,
-      farcasterAddress,
-      wagmiAddress,
-      wagmiConnected,
-      finalAddress: address,
-      finalIsConnected: isConnected,
-      availableConnectors: connectors.map(c => c.name)
-    });
+    if (!hasLoggedConnection.current) {
+      console.log('🔍 Wallet Connection Status:', {
+        isInMiniapp,
+        farcasterAddress,
+        wagmiAddress,
+        wagmiConnected,
+        finalAddress: address,
+        finalIsConnected: isConnected,
+        availableConnectors: connectors.map(c => c.name)
+      });
+      hasLoggedConnection.current = true;
+    }
   }, [isInMiniapp, farcasterAddress, wagmiAddress, wagmiConnected, address, isConnected, connectors]);
   
   // Manual connect handler (fallback)

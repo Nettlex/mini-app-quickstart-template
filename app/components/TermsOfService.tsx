@@ -158,3 +158,4 @@ export default function TermsOfService({ isOpen, onClose, onAccept }: TermsOfSer
   );
 }
 
+

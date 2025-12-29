@@ -41,7 +41,14 @@ export default function Home() {
     }
   }, []);
 
+  // Track if we've already initialized to prevent infinite loops
+  const hasInitialized = useRef(false);
+  
   useEffect(() => {
+    // Only run once on mount
+    if (hasInitialized.current) return;
+    hasInitialized.current = true;
+    
     if (!isFrameReady) {
       setFrameReady();
     }
@@ -53,10 +60,8 @@ export default function Home() {
       .then((context) => {
         if (context) {
           setIsInMiniapp(true);
-          console.log('Farcaster miniapp context:', context);
-          // Log all available properties for debugging
+          
           if (context.user) {
-            console.log('Farcaster user object:', context.user);
             // Check for wallet address in various possible properties
             const walletAddress = (context.user as any).custodyAddress || 
                                  (context.user as any).walletAddress || 
@@ -65,11 +70,8 @@ export default function Home() {
             if (walletAddress) {
               const addr = walletAddress as `0x${string}`;
               setFarcasterAddress(addr);
-              console.log('Farcaster wallet address:', addr);
             }
           }
-          
-          console.log('Available connectors:', connectors.map(c => ({ id: c.id, name: c.name })));
           
           // With Farcaster connector configured in wagmi, connection should work automatically
           // But we can still try to auto-connect if needed
@@ -84,11 +86,9 @@ export default function Home() {
                   );
                   
                   if (farcasterConnector) {
-                    console.log('Found Farcaster connector, connecting...');
                     connect({ connector: farcasterConnector });
                   } else if (connectors[0]) {
                     // Use first available connector
-                    console.log('Connecting with first connector:', connectors[0].id);
                     connect({ connector: connectors[0] });
                   }
                 } catch (err) {
@@ -99,12 +99,11 @@ export default function Home() {
           }
         }
       })
-      .catch((err) => {
+      .catch(() => {
         // Not in miniapp context, that's fine
-        console.log('Not in Farcaster miniapp context:', err);
         setIsInMiniapp(false);
       });
-  }, [setFrameReady, isFrameReady, isConnected, connect, connectors]);
+  }, []); // Empty deps - run once only
 
   // Auto-hide welcome screen after 3 seconds or when wallet connects
   useEffect(() => {
